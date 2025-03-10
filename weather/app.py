@@ -1,4 +1,7 @@
+import logging
 import os
+import threading
+import time
 from functools import wraps
 from typing import Any, Dict, Optional
 
@@ -6,7 +9,75 @@ import requests
 from apiflask import APIFlask
 from flask import jsonify, request
 
+from data import registry_data
+
 app = APIFlask(__name__)
+
+# Configuration
+HEARTBEAT_INTERVAL = 15  # seconds
+REGISTRY_URL = "http://localhost:42069/services"
+SERVICE_ID = 0
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def register_service(url: str):
+    """
+    Register this service.
+    """
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json=registry_data,
+        )
+        if response.status_code == 201:
+            response_data = response.json()
+            SERVICE_ID = response_data.get("id")
+            logger.info(f"Service registered successfully with ID: {SERVICE_ID}")
+            return SERVICE_ID
+        else:
+            logger.error(
+                f"Failed to register service. Status: {response.status_code}, Response: {response.text}"
+            )
+            return None
+    except Exception as e:
+        logger.error(f"Error registering service: {str(e)}")
+        return None
+
+
+def send_heartbeat(service_id: str):
+    """Send a heartbeat to the registry server."""
+    try:
+        if not service_id:
+            logger.error("No service ID. Is the service registered?")
+            return
+        response = requests.get(f"{REGISTRY_URL}/{service_id}/heartbeat")
+        if response.status_code == 200:
+            logger.info("Heartbeat sent successfully")
+        else:
+            logger.error(
+                f"Failed to send heartbeat. Status: {response.status_code}, Response: {response.text}"
+            )
+    except Exception as e:
+        logger.error(f"Error sending heartbeat: {str(e)}")
+
+
+def heartbeat_worker(service_id: str):
+    """Background worker that sends heartbeats at regular intervals."""
+    while True:
+        send_heartbeat(service_id)
+        time.sleep(HEARTBEAT_INTERVAL)
+
+
+# For APIFlask, use app.before_serving hook (if available) or create a function to start the thread
+def start_heartbeat_thread(service_id: str):
+    thread = threading.Thread(target=heartbeat_worker(service_id))
+    thread.daemon = True
+    thread.start()
+    logger.info(f"Heartbeat thread started for service ID: {service_id}")
 
 
 class WeatherGovClient:
@@ -214,5 +285,16 @@ def weather_summary():
 
 
 if __name__ == "__main__":
+    service_id = register_service(REGISTRY_URL)
+
+    if service_id:
+        # Start heartbeat thread before running the app
+        start_heartbeat_thread(service_id)
+
+        # Send initial heartbeat
+        send_heartbeat(service_id)
+    else:
+        logger.error("Cannot start heartbeat thread - service registration failed")
+
     port = int(os.environ.get("PORT", 42068))
     app.run(host="0.0.0.0", port=port)
