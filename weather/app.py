@@ -74,7 +74,7 @@ def heartbeat_worker(service_id: str):
 
 # For APIFlask, use app.before_serving hook (if available) or create a function to start the thread
 def start_heartbeat_thread(service_id: str):
-    thread = threading.Thread(target=heartbeat_worker(service_id))
+    thread = threading.Thread(target=heartbeat_worker, args=(service_id,))
     thread.daemon = True
     thread.start()
     logger.info(f"Heartbeat thread started for service ID: {service_id}")
